@@ -38,6 +38,10 @@ class StampAppPC {
         document.getElementById('resetBtn').addEventListener('click', this.resetSelection.bind(this));
         document.getElementById('newCompareBtn').addEventListener('click', this.newComparison.bind(this));
         
+        // 预览切换事件
+        document.getElementById('togglePreviewBtn').addEventListener('click', this.togglePreviewMode.bind(this));
+        document.getElementById('closePreviewBtn').addEventListener('click', this.togglePreviewMode.bind(this));
+        
         // 窗口事件
         window.addEventListener('dragover', (e) => e.preventDefault());
         window.addEventListener('drop', (e) => e.preventDefault());
@@ -170,7 +174,13 @@ class StampAppPC {
             if (response.ok) {
                 this.uploadedFile = result;
                 this.displayFileInfo(file);
-                this.updateStep(2);
+                
+                // 预加载预览但不显示
+                const pdfPreviewFrame = document.getElementById('pdfPreviewFrame');
+                if (pdfPreviewFrame) {
+                    pdfPreviewFrame.src = `/api/preview/${result.filename}`;
+                }
+                
                 this.hideLoading();
             } else {
                 this.hideLoading();
@@ -196,8 +206,8 @@ class StampAppPC {
                 </div>
             </div>
         `;
-        fileList.style.display = 'block';
-        document.getElementById('detectSection').style.display = 'block';
+        fileList.classList.remove('d-none');
+        document.getElementById('detectSection').classList.remove('d-none');
     }
     
     formatFileSize(bytes) {
@@ -231,9 +241,14 @@ class StampAppPC {
                 this.displaySeals();
 
                 // 显示模板选择区域
-                document.getElementById('templateCard').style.display = 'block';
+                const templateCard = document.getElementById('templateCard');
+                if (templateCard) {
+                    templateCard.classList.remove('d-none');
+                }
 
-                this.updateStep(3);
+                // 自动开启预览模式
+                this.setPreviewMode(true);
+
                 this.hideLoading();
             } else {
                 this.hideLoading();
@@ -246,7 +261,7 @@ class StampAppPC {
     }
     
     displaySeals() {
-        const sealsSection = document.getElementById('sealsSection');
+        const sealsCard = document.getElementById('sealsCard');
         const sealsGrid = document.getElementById('sealsGrid');
         const sealCount = document.getElementById('sealCount');
         
@@ -300,13 +315,43 @@ class StampAppPC {
             });
             
             // 显示模板区域
-            document.getElementById('templateCard').style.display = 'block';
+            const templateCard = document.getElementById('templateCard');
+            if (templateCard) {
+                templateCard.classList.remove('d-none');
+            }
         }
         
-        sealsSection.style.display = 'block';
-        sealsSection.classList.add('fade-in-up');
+        if (sealsCard) {
+            sealsCard.classList.remove('d-none');
+            sealsCard.classList.add('fade-in-up');
+        }
     }
     
+    togglePreviewMode() {
+        const layoutContent = document.getElementById('layoutContent');
+        const isPreviewMode = layoutContent.classList.contains('preview-mode');
+        this.setPreviewMode(!isPreviewMode);
+    }
+
+    setPreviewMode(enable) {
+        const layoutContent = document.getElementById('layoutContent');
+        const rightColumn = document.getElementById('rightColumn');
+        const toggleText = document.getElementById('togglePreviewText');
+        const toggleBtn = document.getElementById('togglePreviewBtn');
+
+        if (enable) {
+            layoutContent.classList.add('preview-mode');
+            rightColumn.classList.remove('d-none');
+            toggleText.textContent = '隐藏预览';
+            toggleBtn.classList.replace('btn-outline-primary', 'btn-primary');
+        } else {
+            layoutContent.classList.remove('preview-mode');
+            rightColumn.classList.add('d-none');
+            toggleText.textContent = '显示预览';
+            toggleBtn.classList.replace('btn-primary', 'btn-outline-primary');
+        }
+    }
+
     selectSeal(seal) {
         // 移除之前的选中状态
         document.querySelectorAll('.seal-card').forEach(card => {
@@ -434,7 +479,6 @@ class StampAppPC {
             
             if (response.ok) {
                 this.displayResult(result);
-                this.updateStep(4);
                 this.hideLoading();
             } else {
                 this.hideLoading();
@@ -474,7 +518,7 @@ class StampAppPC {
         
         reportContent.className = `report-content alert ${alertClass}`;
         
-        resultSection.style.display = 'block';
+        resultSection.classList.remove('d-none');
         resultSection.classList.add('fade-in-up');
         
         // 滚动到结果区域
@@ -521,16 +565,17 @@ class StampAppPC {
         
         // 隐藏结果
         const resultSection = document.getElementById('resultSection');
-        resultSection.style.display = 'none';
+        resultSection.classList.add('d-none');
         resultSection.classList.remove('fade-in-up');
         
         // 滚动到印章选择区域
-        document.getElementById('sealsSection').scrollIntoView({ 
-            behavior: 'smooth', 
-            block: 'center' 
-        });
-        
-        this.updateStep(3);
+        const sealsCard = document.getElementById('sealsCard');
+        if (sealsCard) {
+            sealsCard.scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'center' 
+            });
+        }
     }
     
     newComparison() {
@@ -565,15 +610,23 @@ class StampAppPC {
                 
                 // 4. 清空所有显示区域
                 document.getElementById('fileList').innerHTML = '';
-                document.getElementById('fileList').style.display = 'none';
+                document.getElementById('fileList').classList.add('d-none');
                 
                 document.getElementById('sealsGrid').innerHTML = '';
-                document.getElementById('sealsSection').style.display = 'none';
+                const sealsCard = document.getElementById('sealsCard');
+                if (sealsCard) sealsCard.classList.add('d-none');
                 
                 document.getElementById('templatesGrid').innerHTML = '';
-                document.getElementById('templateCard').style.display = 'none';
+                document.getElementById('templateCard').classList.add('d-none');
                 
-                document.getElementById('resultSection').style.display = 'none';
+                // 重置PDF预览状态
+                this.setPreviewMode(false);
+                const pdfPreviewFrame = document.getElementById('pdfPreviewFrame');
+                if (pdfPreviewFrame) {
+                    pdfPreviewFrame.src = '';
+                }
+
+                document.getElementById('resultSection').classList.add('d-none');
                 document.getElementById('reportContent').innerHTML = '';
                 
                 // 5. 重置文件输入
@@ -582,9 +635,6 @@ class StampAppPC {
                 // 6. 重置按钮
                 document.getElementById('compareBtn').disabled = true;
                 document.getElementById('compareBtn').classList.remove('pulse');
-                
-                // 7. 重置步骤指示器
-                this.updateStep(1);
                 
                 // 8. 隐藏加载并滚动到顶部
                 this.hideLoading();

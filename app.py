@@ -429,6 +429,24 @@ def upload_file():
     
     return jsonify({'error': '文件类型不支持'}), 400
 
+@app.route('/api/preview/<path:filename>')
+def preview_file(filename):
+    """预览文件，强制 inline 显示"""
+    # 防止路径遍历
+    if '..' in filename or filename.startswith('/'):
+        return jsonify({'error': '非法路径'}), 400
+        
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    
+    if os.path.exists(filepath):
+        response = send_file(filepath)
+        # 关键：设置 Content-Disposition 为 inline
+        response.headers['Content-Disposition'] = 'inline'
+        response.headers['Content-Type'] = 'application/pdf'
+        return response
+    
+    return jsonify({'error': '文件不存在'}), 404
+
 @app.route('/api/detect', methods=['POST'])
 def detect_seals():
     """检测PDF中的印章"""
