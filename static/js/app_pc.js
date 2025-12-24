@@ -278,6 +278,9 @@ class StampAppPC {
                             <i class="bi bi-ruler me-1"></i>
                             ${seal.diameter}mm
                         </div>
+                        ${seal.page ? `<div class="seal-page-badge" style="position:absolute; top:12px; left:12px; background:rgba(0,0,0,0.8); color:white; padding:0.25rem 0.5rem; border-radius:10px; font-size:0.75rem;">
+                            <i class="bi bi-file-text me-1"></i>第${seal.page}页
+                        </div>` : ''}
                     </div>
                     <div class="seal-info">
                         <div class="seal-title">印章 ${seal.id}</div>

@@ -136,102 +136,97 @@ class PDFDetector:
     @staticmethod
     def detect_target_seals(pdf_path, output_dir):
         """
-        返回符合尺寸要求的印章列表
+        返回检测到的所有印章列表（不进行尺寸筛选）
         return: [{'id': 1, 'path': '...', 'diameter': 40.2}, ...]
         """
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
         doc = fitz.open(pdf_path)
-        page = doc[0] # 只处理第一页
-        zoom = 300 / 72
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        
-        img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, 3)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        img_h, img_w = img.shape[:2]
-        
-        # 计算比例 (A4宽度 210mm)
-        pixel_to_mm_ratio = 210.0 / img_w
-        
-        # 提取红色区域
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        mask1 = cv2.inRange(hsv, np.array([0, 80, 80]), np.array([10, 255, 255]))
-        mask2 = cv2.inRange(hsv, np.array([160, 80, 80]), np.array([180, 255, 255]))
-        mask = mask1 + mask2
-
-        # ✅ 加强形态学操作，连接相近区域
-        kernel = np.ones((5, 5), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)  # ✅ 闭操作连接
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)   # ✅ 开操作去噪
-        mask = cv2.dilate(mask, kernel, iterations=1)                        # ✅ 膨胀填充
-
-        # ✅ 可选：高斯模糊平滑边缘
-        mask = cv2.GaussianBlur(mask, (5, 5), 0)
-        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
         valid_seals = []
         count = 0
         
-        print(f"[检测] 正在扫描 PDF 页面 (300DPI)...")
+        print(f"[检测] 正在扫描 PDF 所有页面...")
         
-        for cnt in contours:
-            (x, y), radius = cv2.minEnclosingCircle(cnt)
-            diameter_px = radius * 2
-            diameter_mm = diameter_px * pixel_to_mm_ratio
+        # 处理所有页面
+        for page_num, page in enumerate(doc):
+            zoom = 300 / 72
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             
-            count += 1  # ✅ 为所有检测到的轮廓计数
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, 3)
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            img_h, img_w = img.shape[:2]
             
-            # ✅ 显示所有检测到的印章信息
-            if diameter_mm > 10:  # 忽略太小的噪点
-                print(f"  -> 检测到印章{count}: 直径 {diameter_mm:.2f}mm")
+            # 计算比例 (A4宽度 210mm)
+            pixel_to_mm_ratio = 210.0 / img_w
             
-            # 裁剪
-            margin = int(radius * 0.2)
-            x1 = max(0, int(x - radius - margin))
-            y1 = max(0, int(y - radius - margin))
-            x2 = min(img_w, int(x + radius + margin))
-            y2 = min(img_h, int(y + radius + margin))
-            
-            seal_crop = img[y1:y2, x1:x2]
-            
-            if seal_crop.size == 0: 
-                print(f"  [警告] 印章{count} 裁剪区域为空")
-                continue
+            # 提取红色区域
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            mask1 = cv2.inRange(hsv, np.array([0, 80, 80]), np.array([10, 255, 255]))
+            mask2 = cv2.inRange(hsv, np.array([160, 80, 80]), np.array([180, 255, 255]))
+            mask = mask1 + mask2
 
-            # 处理并保存
-            final_name = f"seal_{count}_processed.png"
-            final_path = os.path.join(output_dir, final_name)
+            # 加强形态学操作
+            kernel = np.ones((5, 5), np.uint8)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            mask = cv2.dilate(mask, kernel, iterations=1)
             
-            print(f"     正在进行图像增强和去噪...")
-            try:
-                processed_path = SealProcessor.process_and_save(seal_crop, final_path)
+            mask = cv2.GaussianBlur(mask, (5, 5), 0)
+            _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            for cnt in contours:
+                (x, y), radius = cv2.minEnclosingCircle(cnt)
+                diameter_px = radius * 2
+                diameter_mm = diameter_px * pixel_to_mm_ratio
                 
-                # ✅ 保存所有印章，不仅仅是符合尺寸的
-                valid_seals.append({
-                    "id": count,
-                    "diameter": diameter_mm,
-                    "path": processed_path,
-                    "x": int(x),
-                    "y": int(y),
-                    "radius": int(radius)
-                })
+                # 过滤掉太小的噪点（直径小于5mm的忽略）
+                if diameter_mm < 5:
+                    continue
                 
-                # ✅ 额外标记是否符合尺寸
-                if (TARGET_DIAMETER_MM - TOLERANCE_MM) <= diameter_mm <= (TARGET_DIAMETER_MM + TOLERANCE_MM):
-                    print(f"     ✅ 符合尺寸要求 (40mm±1mm)")
-                else:
-                    print(f"     ⚠️  不符合尺寸要求")
+                count += 1
+                
+                # 裁剪印章区域
+                margin = int(radius * 0.2)
+                x1 = max(0, int(x - radius - margin))
+                y1 = max(0, int(y - radius - margin))
+                x2 = min(img_w, int(x + radius + margin))
+                y2 = min(img_h, int(y + radius + margin))
+                
+                seal_crop = img[y1:y2, x1:x2]
+                
+                if seal_crop.size == 0:
+                    print(f"  [警告] 第{page_num+1}页印章{count} 裁剪区域为空")
+                    continue
+
+                # 处理并保存
+                final_name = f"seal_{count}_processed.png"
+                final_path = os.path.join(output_dir, final_name)
+                
+                print(f"  第{page_num+1}页 -> 印章{count}: 直径 {diameter_mm:.2f}mm")
+                
+                try:
+                    processed_path = SealProcessor.process_and_save(seal_crop, final_path)
                     
-            except Exception as e:
-                print(f"  [错误] 处理印章{count}失败: {str(e)}")
+                    valid_seals.append({
+                        "id": count,
+                        "diameter": diameter_mm,
+                        "path": processed_path,
+                        "x": int(x),
+                        "y": int(y),
+                        "radius": int(radius),
+                        "page": page_num + 1  # 添加页面信息
+                    })
+                    
+                except Exception as e:
+                    print(f"  [错误] 处理第{page_num+1}页印章{count}失败: {str(e)}")
         
         doc.close()
         
-        # ✅ 排序：符合尺寸的在前
-        valid_seals.sort(key=lambda x: abs(x['diameter'] - TARGET_DIAMETER_MM))
+        # 按页面和位置排序
+        valid_seals.sort(key=lambda x: (x['page'], x['y']))
         
         return valid_seals
 
