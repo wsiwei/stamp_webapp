@@ -567,6 +567,45 @@
                 gap: 1.5rem;
             }
         }
+
+        /* 打印样式优化 */
+        @media print {
+            .navbar, 
+            .left-column > *:not(#resultSection), /* 隐藏左侧除了结果区以外的所有内容 */
+            .right-column,
+            #togglePreviewBtn, 
+            #resetBtn,
+            #newCompareBtn,
+            .btn:not(.btn-outline-secondary), /* 隐藏除了打印按钮以外的按钮(或者全部隐藏更干净) */
+            .shortcut-hint {
+                display: none !important;
+            }
+
+            body, .main-wrapper, .layout-content, .left-column {
+                background: white;
+                margin: 0;
+                padding: 0;
+                width: 100%;
+                max-width: 100%;
+                display: block;
+            }
+
+            #resultSection {
+                display: block !important;
+                border: none;
+                box-shadow: none;
+            }
+
+            .comparison-container {
+                box-shadow: none;
+                border: 1px solid #ddd;
+            }
+            
+            /* 隐藏打印按钮本身 */
+            button[onclick="window.print()"] {
+                display: none !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -712,6 +751,12 @@
                                 <button class="btn btn-light border" id="resetBtn">
                                     <i class="bi bi-arrow-counterclockwise me-2"></i>重选印章
                                 </button>
+                                <button class="btn btn-outline-secondary" onclick="window.print()">
+                                    <i class="bi bi-printer me-2"></i>打印报告
+                                </button>
+                                <button class="btn btn-outline-success" id="exportBtn">
+                                    <i class="bi bi-file-earmark-arrow-down me-2"></i>导出报告
+                                </button>
                                 <button class="btn btn-primary" id="newCompareBtn">
                                     <i class="bi bi-plus-lg me-2"></i>开始新任务 (Ctrl+N)
                                 </button>
@@ -789,6 +834,8 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="static/js/app_pc.js"></script>
 </body>
 </html>

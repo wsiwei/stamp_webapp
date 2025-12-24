@@ -414,9 +414,24 @@ def upload_file():
         return jsonify({'error': '未选择文件'}), 400
     
     if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
+        # 处理文件名，确保保留 .pdf 后缀
+        original_filename = file.filename
+        secure_name = secure_filename(original_filename)
+        
+        # 如果 secure_filename 把后缀搞没了（例如 "中文.pdf" -> "pdf"），手动补上
+        if not secure_name.lower().endswith('.pdf'):
+            # 尝试提取原始后缀
+            if original_filename.lower().endswith('.pdf'):
+                if secure_name:
+                    secure_name = f"{secure_name}.pdf"
+                else:
+                    # 极端情况：文件名全是非安全字符
+                    secure_name = "document.pdf"
+            else:
+                secure_name = f"{secure_name}.pdf"
+
         timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]  # 毫秒级时间戳
-        filename = f"{timestamp}_{filename}"
+        filename = f"{timestamp}_{secure_name}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
