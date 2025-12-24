@@ -258,8 +258,8 @@ class StampAppPC {
                 <div class="col-12">
                     <div class="alert alert-warning text-center py-4">
                         <i class="bi bi-exclamation-triangle me-2" style="font-size: 2rem;"></i>
-                        <h5 class="mt-2">未检测到符合条件的印章</h5>
-                        <p class="mb-0">请确保PDF第一页有红色印章，且直径在40mm±1mm范围内</p>
+                        <h5 class="mt-2">未检测到印章</h5>
+                        <p class="mb-0">请确保PDF文件中有红色印章</p>
                     </div>
                 </div>
             `;
@@ -268,12 +268,16 @@ class StampAppPC {
                 const sealCard = document.createElement('div');
                 sealCard.className = 'seal-card';
                 
-                // 直接使用 seal.image_url，不要创建额外的变量
-                const imgUrl = seal.image_url; // 使用局部变量
+                // 为图片URL添加时间戳防止缓存
+                let imgUrl = seal.image_url;
+                if (!imgUrl.includes('?_t=')) {
+                    imgUrl = imgUrl + '?_t=' + (seal.timestamp || Date.now());
+                }
                 
                 sealCard.innerHTML = `
                     <div class="seal-image-container">
-                        <img src="${imgUrl}" class="seal-image" alt="印章 ${seal.id}">
+                        <img src="${imgUrl}" class="seal-image" alt="印章 ${seal.id}" 
+                             onerror="this.onerror=null; this.src='${seal.original_image_url}?retry='+Date.now();">
                         <div class="seal-badge">
                             <i class="bi bi-ruler me-1"></i>
                             ${seal.diameter}mm
@@ -295,13 +299,8 @@ class StampAppPC {
                 sealsGrid.appendChild(sealCard);
             });
             
-            // ✅ 显示模板区域
+            // 显示模板区域
             document.getElementById('templateCard').style.display = 'block';
-            
-            // ✅ 如果模板还没加载，重新加载一下
-            if (this.templates.length === 0) {
-                this.loadTemplates();
-            }
         }
         
         sealsSection.style.display = 'block';
@@ -356,49 +355,23 @@ class StampAppPC {
     
     displayTemplates() {
         const templatesGrid = document.getElementById('templatesGrid');
-        if (!templatesGrid) {
-            console.error('模板网格元素不存在');
-            return;
-        }
+        if (!templatesGrid) return;
         templatesGrid.innerHTML = '';
-
-        console.log('显示模板，数量:', this.templates.length);
-        
-        if (this.templates.length === 0) {
-            templatesGrid.innerHTML = `
-                <div class="col-12">
-                    <div class="alert alert-warning text-center py-4">
-                        <i class="bi bi-folder-x me-2" style="font-size: 2rem;"></i>
-                        <h5 class="mt-2">未找到模板图片</h5>
-                        <p class="mb-0">请检查模板目录: D:\work\OCR\Template</p>
-                    </div>
-                </div>
-            `;
-            return;
-        }
-        
+    
         this.templates.forEach((template, index) => {
             const templateItem = document.createElement('div');
             templateItem.className = 'template-item';
+            
+            // 为模板图片添加时间戳
+            const templateUrl = `/api/template/${encodeURIComponent(template)}?_t=${Date.now()}`;
+            
             templateItem.innerHTML = `
-                <img src="/api/template/${encodeURIComponent(template)}" 
+                <img src="${templateUrl}" 
                      class="template-image" 
-                     alt="模板 ${index + 1}">
+                     alt="模板 ${index + 1}"
+                     onerror="this.onerror=null; this.src='${templateUrl}&retry='+Date.now();">
                 <div class="template-name" title="${template}">${template}</div>
             `;
-            
-            // 图片加载失败处理
-            const img = templateItem.querySelector('img');
-            img.onerror = function() {
-                console.log('图片加载失败，使用默认样式');
-                this.onerror = null; // 防止循环
-                this.style.backgroundColor = '#f8f9fa';
-                this.style.border = '1px dashed #dee2e6';
-                this.style.display = 'flex';
-                this.style.alignItems = 'center';
-                this.style.justifyContent = 'center';
-                this.innerHTML = '<span style="color: #6c757d; font-size: 12px;">图片</span>';
-            };
             
             templateItem.addEventListener('click', (e) => {
                 document.querySelectorAll('.template-item').forEach(item => {
@@ -561,35 +534,74 @@ class StampAppPC {
     }
     
     newComparison() {
-        this.showConfirm('确认新建比对', '这将清除当前所有数据，开始新的比对。是否继续？', () => {
-            // 清理临时文件
-            fetch('/api/cleanup', { method: 'POST' }).catch(console.error);
+        this.showConfirm('确认新建比对', '这将清除当前所有数据，开始新的比对。是否继续？', async () => {
+            this.showLoading('正在清理...', '请稍候...');
             
-            // 重置所有状态
-            this.uploadedFile = null;
-            this.detectedSeals = [];
-            this.selectedSeal = null;
-            this.selectedTemplate = null;
-            this.currentStep = 1;
-            
-            // 隐藏所有区域
-            document.getElementById('fileList').style.display = 'none';
-            document.getElementById('detectSection').style.display = 'none';
-            document.getElementById('sealsSection').style.display = 'none';
-            document.getElementById('resultSection').style.display = 'none';
-            
-            // 移除动画类
-            document.getElementById('sealsSection').classList.remove('fade-in-up');
-            document.getElementById('resultSection').classList.remove('fade-in-up');
-            
-            // 清空文件输入
-            document.getElementById('fileInput').value = '';
-            
-            // 回到第一步
-            this.updateStep(1);
-            
-            // 滚动到顶部
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            try {
+                // 1. 先清理后端文件
+                await fetch('/api/cleanup', { 
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                // 给后端一点时间完成清理
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // 2. 重置所有状态
+                this.uploadedFile = null;
+                this.detectedSeals = [];
+                this.selectedSeal = null;
+                this.selectedTemplate = null;
+                this.currentStep = 1;
+                
+                // 3. 强制清空所有图片缓存
+                document.querySelectorAll('img').forEach(img => {
+                    if (img.src.includes('/temp/') || img.src.includes('/api/template/')) {
+                        img.src = '';
+                    }
+                });
+                
+                // 4. 清空所有显示区域
+                document.getElementById('fileList').innerHTML = '';
+                document.getElementById('fileList').style.display = 'none';
+                
+                document.getElementById('sealsGrid').innerHTML = '';
+                document.getElementById('sealsSection').style.display = 'none';
+                
+                document.getElementById('templatesGrid').innerHTML = '';
+                document.getElementById('templateCard').style.display = 'none';
+                
+                document.getElementById('resultSection').style.display = 'none';
+                document.getElementById('reportContent').innerHTML = '';
+                
+                // 5. 重置文件输入
+                document.getElementById('fileInput').value = '';
+                
+                // 6. 重置按钮
+                document.getElementById('compareBtn').disabled = true;
+                document.getElementById('compareBtn').classList.remove('pulse');
+                
+                // 7. 重置步骤指示器
+                this.updateStep(1);
+                
+                // 8. 隐藏加载并滚动到顶部
+                this.hideLoading();
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                
+                // 9. 重新加载模板
+                setTimeout(() => {
+                    this.loadTemplates();
+                }, 100);
+                
+            } catch (error) {
+                this.hideLoading();
+                console.error('清理失败:', error);
+                this.showConfirm('清理失败', '清理过程中发生错误，建议刷新页面', () => {
+                    location.reload();
+                });
+            }
         });
     }
     

@@ -6,29 +6,34 @@ import base64
 import requests
 import json
 import time
+import shutil
+import glob
 from flask import Flask, request, jsonify, render_template, send_file, url_for
 from werkzeug.utils import secure_filename
-import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ================= 配置区域 =================
-API_KEY = "sk-hqvikeanuredrltsdfkhlffqyggjmeirjodrjjdlkwgplhlh"  # 你的API Key
-TEMPLATE_FOLDER = r"D:\work\stamp_webapp\templates_sample"  # 模板文件夹路径
-MODEL_NAME = "Qwen/Qwen3-VL-32B-Instruct" 
+API_KEY = "sk-hqvikeanuredrltsdfkhlffqyggjmeirjodrjjdlkwgplhlh"
+TEMPLATE_FOLDER = r"D:\work\stamp_webapp\templates_sample"
+MODEL_NAME = "Qwen/Qwen3-VL-32B-Instruct"
 
 # 尺寸筛选配置
-TARGET_DIAMETER_MM = 40.0  # 目标直径
-TOLERANCE_MM = 1.0         # 容差范围 (+/-)
+TARGET_DIAMETER_MM = 40.0
+TOLERANCE_MM = 1.0
 
 # Flask配置
 UPLOAD_FOLDER = 'static/uploads'
 TEMP_FOLDER = 'static/temp'
 ALLOWED_EXTENSIONS = {'pdf'}
 
+# 文件清理配置
+MAX_UPLOAD_FILES = 10  # 最多保留的文件数
+MAX_UPLOAD_AGE_HOURS = 24  # 文件最大保留时间（小时）
+
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['TEMP_FOLDER'] = TEMP_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB限制
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 # 确保目录存在
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -309,6 +314,87 @@ def get_templates():
             templates.append(f)
     return templates
 
+def cleanup_old_files():
+    """清理旧的上传文件"""
+    try:
+        upload_dir = app.config['UPLOAD_FOLDER']
+        if not os.path.exists(upload_dir):
+            return
+        
+        files = []
+        for f in os.listdir(upload_dir):
+            if f.lower().endswith('.pdf'):
+                filepath = os.path.join(upload_dir, f)
+                mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
+                files.append((filepath, mtime))
+        
+        # 按修改时间排序（旧的在前面）
+        files.sort(key=lambda x: x[1])
+        
+        # 删除旧文件（超过数量限制或时间限制）
+        cutoff_time = datetime.now() - timedelta(hours=MAX_UPLOAD_AGE_HOURS)
+        deleted_count = 0
+        
+        for i, (filepath, mtime) in enumerate(files):
+            should_delete = False
+            
+            # 1. 如果文件太旧
+            if mtime < cutoff_time:
+                should_delete = True
+            # 2. 如果文件数量超过限制（保留最新的）
+            elif i < len(files) - MAX_UPLOAD_FILES:
+                should_delete = True
+            
+            if should_delete:
+                try:
+                    os.remove(filepath)
+                    deleted_count += 1
+                    print(f"  [清理] 删除旧文件: {os.path.basename(filepath)}")
+                except Exception as e:
+                    print(f"  [清理] 删除文件失败 {filepath}: {e}")
+        
+        if deleted_count > 0:
+            print(f"  [清理] 已清理 {deleted_count} 个旧文件")
+            
+    except Exception as e:
+        print(f"  [清理] 清理文件时出错: {e}")
+
+def cleanup_temp_folder():
+    """清理临时文件夹，确保全新开始"""
+    temp_dir = app.config['TEMP_FOLDER']
+    
+    # 先删除整个文件夹
+    if os.path.exists(temp_dir):
+        try:
+            shutil.rmtree(temp_dir)
+            print(f"  [清理] 已删除临时文件夹: {temp_dir}")
+        except Exception as e:
+            print(f"  [清理] 删除临时文件夹失败: {e}")
+    
+    # 重新创建
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    # 确保文件夹为空
+    if os.listdir(temp_dir):
+        print(f"  [警告] 临时文件夹不为空: {os.listdir(temp_dir)}")
+        # 尝试再次清理
+        for f in os.listdir(temp_dir):
+            try:
+                os.remove(os.path.join(temp_dir, f))
+            except:
+                pass
+
+def add_timestamp_to_url(url):
+    """为URL添加时间戳防止缓存"""
+    if not url:
+        return url
+    
+    # 如果已经有查询参数
+    if '?' in url:
+        return f"{url}&_t={int(time.time())}"
+    else:
+        return f"{url}?_t={int(time.time())}"
+
 # 路由定义
 @app.route('/')
 def index():
@@ -317,6 +403,9 @@ def index():
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
     """上传PDF文件"""
+    # 先清理旧文件
+    cleanup_old_files()
+    
     if 'file' not in request.files:
         return jsonify({'error': '没有文件'}), 400
     
@@ -326,7 +415,7 @@ def upload_file():
     
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]  # 毫秒级时间戳
         filename = f"{timestamp}_{filename}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
@@ -334,7 +423,8 @@ def upload_file():
         return jsonify({
             'message': '上传成功',
             'filename': filename,
-            'filepath': filepath
+            'filepath': filepath,
+            'timestamp': timestamp  # 返回时间戳给前端
         })
     
     return jsonify({'error': '文件类型不支持'}), 400
@@ -348,30 +438,35 @@ def detect_seals():
     if not filepath or not os.path.exists(filepath):
         return jsonify({'error': '文件不存在'}), 400
     
-    # 清理临时目录
-    temp_dir = app.config['TEMP_FOLDER']
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-    os.makedirs(temp_dir, exist_ok=True)
+    # 彻底清理临时目录
+    cleanup_temp_folder()
     
     try:
-        seals = PDFDetector.detect_target_seals(filepath, temp_dir)
+        seals = PDFDetector.detect_target_seals(filepath, TEMP_FOLDER)
         
-        # 转换为可序列化的格式
+        # 转换为可序列化的格式，添加时间戳防止缓存
         result = []
         for seal in seals:
+            # 添加时间戳到图片URL
+            image_url = url_for('static', filename=f'temp/seal_{seal["id"]}_processed.png')
+            image_url_with_timestamp = add_timestamp_to_url(image_url)
+            
             result.append({
                 'id': seal['id'],
                 'diameter': round(seal['diameter'], 2),
-                'image_url': url_for('static', filename=f'temp/seal_{seal["id"]}_processed.png'),
+                'image_url': image_url_with_timestamp,  # 使用带时间戳的URL
+                'original_image_url': image_url,  # 保留原始URL
                 'x': seal['x'],
                 'y': seal['y'],
-                'radius': seal['radius']
+                'radius': seal['radius'],
+                'page': seal.get('page', 1),
+                'timestamp': int(time.time())  # 添加时间戳
             })
         
         return jsonify({
             'seals': result,
-            'count': len(result)
+            'count': len(result),
+            'timestamp': int(time.time())  # 返回时间戳
         })
     except Exception as e:
         return jsonify({'error': f'检测失败: {str(e)}'}), 500
@@ -387,20 +482,15 @@ def get_template_image(filename):
     """获取模板图片"""
     safe_filename = secure_filename(filename)
     filepath = os.path.join(TEMPLATE_FOLDER, safe_filename)
-
-    print(f"[DEBUG] 请求模板: {filename}")
-    print(f"[DEBUG] 安全文件名: {safe_filename}")
-    print(f"[DEBUG] 完整路径: {filepath}")
-    print(f"[DEBUG] 文件是否存在: {os.path.exists(filepath)}")
-
-    # 返回错误或默认图片
-    default_image = os.path.join('static', 'default_template.png')
-    if os.path.exists(default_image):
-        return send_file(default_image)
-
-    if os.path.exists(filepath):
-        return send_file(filepath)
     
+    if os.path.exists(filepath):
+        # 为模板图片也添加时间戳防止缓存
+        response = send_file(filepath)
+        # 设置缓存控制头
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     
     return jsonify({'error': '模板不存在'}), 404
 
@@ -409,68 +499,42 @@ def compare_seals():
     """对比印章"""
     try:
         data = request.get_json()
-        print(f"[DEBUG] 收到比对请求数据: {data}")
         
         seal_path = data.get('seal_path')
         template_name = data.get('template_name')
         
         if not seal_path or not template_name:
-            print(f"[ERROR] 参数不完整: seal_path={seal_path}, template_name={template_name}")
-            return jsonify({'error': '参数不完整', 'received': data}), 400
+            return jsonify({'error': '参数不完整'}), 400
         
-        print(f"[DEBUG] 原始印章路径: {seal_path}")
-        print(f"[DEBUG] 原始模板名称: {template_name}")
-        
-        # 处理印章路径
-        # 移除可能的开头的斜杠
-        if seal_path.startswith('/'):
-            seal_path = seal_path[1:]
-            print(f"[DEBUG] 移除开头斜杠后: {seal_path}")
-        
-        # 如果路径以static/开头，移除它（因为os.path.join会处理）
-        if seal_path.startswith('static/'):
-            seal_path = seal_path[7:]
-            print(f"[DEBUG] 移除static/后: {seal_path}")
+        # 移除时间戳参数（如果有）
+        if '?_t=' in seal_path:
+            seal_path = seal_path.split('?_t=')[0]
         
         # 构建完整路径
-        seal_full_path = os.path.join('static', seal_path)
+        seal_full_path = os.path.join('static', seal_path) if not seal_path.startswith('static/') else seal_path
         template_full_path = os.path.join(TEMPLATE_FOLDER, template_name)
-        
-        print(f"[DEBUG] 构建的印章路径: {seal_full_path}")
-        print(f"[DEBUG] 构建的模板路径: {template_full_path}")
-        print(f"[DEBUG] 印章路径是否存在: {os.path.exists(seal_full_path)}")
-        print(f"[DEBUG] 模板路径是否存在: {os.path.exists(template_full_path)}")
         
         # 检查文件是否存在
         if not os.path.exists(seal_full_path):
-            # 列出静态目录看看有什么文件
-            static_dir = 'static'
-            if os.path.exists(static_dir):
-                print(f"[DEBUG] 静态目录内容:")
-                for root, dirs, files in os.walk(static_dir):
-                    level = root.replace(static_dir, '').count(os.sep)
-                    indent = ' ' * 2 * level
-                    print(f'{indent}{os.path.basename(root)}/')
-                    subindent = ' ' * 2 * (level + 1)
-                    for file in files:
-                        print(f'{subindent}{file}')
-            
-            return jsonify({'error': f'印章图片不存在: {seal_full_path}', 
-                          'seal_path': seal_path,
-                          'full_path': seal_full_path}), 400
+            # 尝试不带"temp/"前缀的路径
+            if 'temp/' in seal_full_path:
+                alt_path = seal_full_path.replace('temp/', '')
+                if os.path.exists(alt_path):
+                    seal_full_path = alt_path
+                else:
+                    return jsonify({'error': f'印章图片不存在: {seal_full_path}'}), 400
         
         if not os.path.exists(template_full_path):
             return jsonify({'error': f'模板图片不存在: {template_full_path}'}), 400
         
         # 执行比对
-        print(f"[DEBUG] 开始调用VLMClient.compare...")
         result = VLMClient.compare(seal_full_path, template_full_path)
-        print(f"[DEBUG] 比对完成")
         
         return jsonify({
             'result': result,
             'seal': os.path.basename(seal_full_path),
-            'template': template_name
+            'template': template_name,
+            'timestamp': int(time.time())
         })
         
     except Exception as e:
@@ -482,15 +546,25 @@ def compare_seals():
 @app.route('/api/cleanup', methods=['POST'])
 def cleanup():
     """清理临时文件"""
-    temp_dir = app.config['TEMP_FOLDER']
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-    os.makedirs(temp_dir, exist_ok=True)
+    cleanup_temp_folder()
+    cleanup_old_files()  # 同时清理旧的上传文件
     return jsonify({'message': '清理完成'})
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """健康检查，顺便清理文件"""
+    cleanup_old_files()
+    return jsonify({'status': 'healthy', 'timestamp': int(time.time())})
+
 
 if __name__ == '__main__':
     print("="*60)
     print("      印章提取与智能比对系统 - Web服务")
     print(f"      模板目录: {TEMPLATE_FOLDER}")
+    print(f"      自动清理: {MAX_UPLOAD_FILES}个文件或{MAX_UPLOAD_AGE_HOURS}小时")
     print("="*60)
+    
+    # 启动时清理一次
+    cleanup_old_files()
+    
     app.run(debug=True, host='0.0.0.0', port=5000)
