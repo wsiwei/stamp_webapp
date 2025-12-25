@@ -508,7 +508,14 @@ class StampAppPC {
         
         // 设置报告内容
         const reportContent = document.getElementById('reportContent');
-        reportContent.innerHTML = result.result.replace(/\n/g, '<br>');
+        
+        // 使用 marked 解析 Markdown 内容
+        if (typeof marked !== 'undefined') {
+            reportContent.innerHTML = marked.parse(result.result);
+        } else {
+            // 降级处理
+            reportContent.innerHTML = result.result.replace(/\n/g, '<br>');
+        }
         
         // 判断结论并设置样式
         const conclusion = result.result.toLowerCase();
