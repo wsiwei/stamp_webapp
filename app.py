@@ -258,8 +258,9 @@ class VLMClient:
             2. 对比字体样式、风格、字间距、文字排列方向。\n
             3. 对比五角星（如有）的大小、位置和形状。\n
             4. 忽略图片1可能存在的轻微模糊或边缘锯齿（由提取算法造成）。\n
-            5. 检查图片1是否存在黑色字体覆盖在印章上面，若有，存在造假嫌疑。\n
-            "请给出详细的分析报告，并最终给出"一致"或"不一致"的结论。
+            "请给出详细的分析报告，并按以下格式和markdown红色高亮最终给出"一致"或"不一致"的结论。
+            格式：
+                结论：[一致/不一致]
         '''
 
         payload = {
@@ -299,10 +300,14 @@ class VLMClient:
         except Exception as e:
             return f"请求发生异常: {str(e)}"
 
+ALLOWED_TEMPLATE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp'}
+
 # 工具函数
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def allowed_template(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_TEMPLATE_EXTENSIONS
 def get_templates():
     """获取模板列表"""
     if not os.path.exists(TEMPLATE_FOLDER):
@@ -503,6 +508,33 @@ def detect_seals():
         })
     except Exception as e:
         return jsonify({'error': f'检测失败: {str(e)}'}), 500
+
+@app.route('/api/upload_template', methods=['POST'])
+def upload_template():
+    """上传模板图片"""
+    if 'file' not in request.files:
+        return jsonify({'error': '没有文件'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': '未选择文件'}), 400
+        
+    if file and allowed_template(file.filename):
+        # 确保模板目录存在
+        os.makedirs(TEMPLATE_FOLDER, exist_ok=True)
+        
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(TEMPLATE_FOLDER, filename)
+        
+        # 保存文件 (如果存在则覆盖)
+        file.save(filepath)
+        
+        return jsonify({
+            'message': '上传成功',
+            'filename': filename
+        })
+        
+    return jsonify({'error': '不支持的文件格式'}), 400
 
 @app.route('/api/templates', methods=['GET'])
 def get_template_list():

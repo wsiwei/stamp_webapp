@@ -39,6 +39,11 @@ class StampAppPC {
         document.getElementById('exportBtn').addEventListener('click', this.exportReport.bind(this));
         document.getElementById('newCompareBtn').addEventListener('click', this.newComparison.bind(this));
         
+        // 模板上传事件
+        const templateInput = document.getElementById('templateInput');
+        document.getElementById('uploadTemplateBtn').addEventListener('click', () => templateInput.click());
+        templateInput.addEventListener('change', this.uploadTemplate.bind(this));
+
         // 预览切换事件
         document.getElementById('togglePreviewBtn').addEventListener('click', this.togglePreviewMode.bind(this));
         document.getElementById('closePreviewBtn').addEventListener('click', this.togglePreviewMode.bind(this));
@@ -386,6 +391,52 @@ class StampAppPC {
         });
     }
     
+    async uploadTemplate(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        // 重置input以便下次选择相同文件
+        e.target.value = '';
+
+        if (file.size > 5 * 1024 * 1024) {
+            this.showConfirm('文件过大', '模板图片不能超过5MB', () => {});
+            return;
+        }
+
+        this.showLoading('正在上传模板...', '请稍候...');
+        
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        try {
+            const response = await fetch('/api/upload_template', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+                this.hideLoading();
+                // 重新加载模板列表
+                await this.loadTemplates();
+                // 提示成功
+                const toast = document.createElement('div');
+                toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 p-3 bg-success text-white rounded shadow';
+                toast.style.zIndex = '9999';
+                toast.innerHTML = `<i class="bi bi-check-circle me-2"></i>模板 "${result.filename}" 上传成功`;
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 3000);
+            } else {
+                this.hideLoading();
+                this.showConfirm('上传失败', result.error || '上传失败', () => {});
+            }
+        } catch (error) {
+            this.hideLoading();
+            this.showConfirm('网络错误', '上传过程中发生错误: ' + error.message, () => {});
+        }
+    }
+
     async loadTemplates() {
         try {
             const response = await fetch('/api/templates');
