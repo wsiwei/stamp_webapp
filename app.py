@@ -182,6 +182,8 @@ class PDFDetector:
 
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
+            # 1. 收集本页所有候选轮廓
+            page_candidates = []
             for cnt in contours:
                 (x, y), radius = cv2.minEnclosingCircle(cnt)
                 diameter_px = radius * 2
@@ -190,6 +192,52 @@ class PDFDetector:
                 # 过滤掉太小的噪点（直径小于5mm的忽略）
                 if diameter_mm < 5:
                     continue
+                
+                page_candidates.append({
+                    'cnt': cnt,
+                    'x': x,
+                    'y': y,
+                    'radius': radius,
+                    'diameter_mm': diameter_mm
+                })
+            
+            # 2. 过滤包含关系（去除被大印章包含的小印章部件）
+            # 按半径从大到小排序，优先保留大的
+            page_candidates.sort(key=lambda c: c['radius'], reverse=True)
+            valid_page_seals = []
+            
+            for i, curr in enumerate(page_candidates):
+                is_inner_part = False
+                for j in range(i): # 只跟前面比它大的比较
+                    larger = page_candidates[j]
+                    
+                    # 计算圆心距离
+                    dist = np.sqrt((curr['x'] - larger['x'])**2 + (curr['y'] - larger['y'])**2)
+                    
+                    # 判定条件1：几何包含 (圆心距离 + 小圆半径 <= 大圆半径 * 1.1)
+                    if dist + curr['radius'] <= larger['radius'] * 1.1:
+                        is_inner_part = True
+                        break
+                    
+                    # 判定条件2：同心重叠 (圆心距离很近，且半径明显较小)
+                    # 例如印章中间的五角星，虽然不算完全几何包含（如果是空心圆环），但视觉上属于内部
+                    if dist < larger['radius'] * 0.5 and curr['radius'] < larger['radius'] * 0.8:
+                        is_inner_part = True
+                        break
+
+                    # 判定条件3：高度重叠 (两圆心距离 < 大圆半径)，且小圆半径 < 大圆半径 * 0.9
+                    # 这种情况通常是印章被分割成了两个相交的圆，或者印章的一部分（如外圈的一部分）被识别成了圆
+                    if dist < larger['radius'] and curr['radius'] < larger['radius'] * 0.9:
+                        is_inner_part = True
+                        break
+                
+                if not is_inner_part:
+                    valid_page_seals.append(curr)
+            
+            # 3. 处理有效的印章
+            for item in valid_page_seals:
+                x, y, radius = item['x'], item['y'], item['radius']
+                diameter_mm = item['diameter_mm']
                 
                 count += 1
                 
@@ -254,7 +302,7 @@ class VLMClient:
             图片1：是从文档中提取并增强处理后的印章（待检测）。\n
             图片2：是标准的印章模板（真章）。\n
             
-            任务：\ns
+            任务：\n
             - 仔细对比文字内容（包括汉字、数字、编码）是否完全一致。\n
             - 对比字体样式、风格、字间距、文字排列方向。\n
             - 对比五角星（如有）的大小、位置和形状。\n
@@ -263,6 +311,7 @@ class VLMClient:
             "请给出详细的分析报告，并按以下格式和markdown红色高亮最终给出"一致"或"不一致"的结论。
             格式：
                 结论：[一致/不一致]
+                # 概率：[0-1之间的浮点数，保留2位小数]
         '''
 
         payload = {
@@ -402,6 +451,32 @@ def add_timestamp_to_url(url):
     else:
         return f"{url}?_t={int(time.time())}"
 
+def secure_filename_with_chinese(filename):
+    """
+    允许中文的文件名清理函数
+    只移除非法字符，保留中文和常见符号
+    """
+    if not filename:
+        return "unnamed"
+        
+    # 替换路径分隔符
+    filename = filename.replace('/', '_').replace('\\', '_')
+    
+    # 移除非法字符 (Windows/Linux)
+    # < > : " / \ | ? *
+    invalid_chars = r'[<>:"/\\|?*\x00-\x1f]'
+    import re
+    filename = re.sub(invalid_chars, '', filename)
+    
+    # 去除首尾空格
+    filename = filename.strip()
+    
+    # 限制长度
+    if len(filename.encode('utf-8')) > 200:
+        filename = filename[:50]
+        
+    return filename if filename else "unnamed"
+
 # 路由定义
 @app.route('/')
 def index():
@@ -538,6 +613,151 @@ def upload_template():
         
     return jsonify({'error': '不支持的文件格式'}), 400
 
+@app.route('/api/extract_seals_from_pdf', methods=['POST'])
+def extract_seals_from_pdf():
+    """从PDF提取印章但不立即保存为模板"""
+    if 'file' not in request.files:
+        return jsonify({'error': '没有文件'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': '未选择文件'}), 400
+        
+    if file and allowed_file(file.filename):
+        # 1. 保存PDF到临时目录
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+        filename = f"temp_extract_{timestamp}.pdf"
+        filepath = os.path.join(app.config['TEMP_FOLDER'], filename)
+        file.save(filepath)
+        
+        try:
+            # 2. 使用PDFDetector检测印章
+            temp_output_dir = os.path.join(app.config['TEMP_FOLDER'], f"extracted_{timestamp}")
+            os.makedirs(temp_output_dir, exist_ok=True)
+            
+            seals = PDFDetector.detect_target_seals(filepath, temp_output_dir)
+            
+            # 3. 构造返回结果，此时图片仍在临时目录
+            result_seals = []
+            for seal in seals:
+                # 构造临时访问URL
+                image_filename = os.path.basename(seal['path'])
+                # 这里我们需要一个能访问临时图片的路由，或者将图片临时移动到static/temp
+                # 为了简单，我们假设 detect_target_seals 已经把图片存在了 temp_output_dir
+                # 我们需要把这些图片移动到 static/temp 以便前端预览
+                
+                static_temp_dir = os.path.join(app.root_path, 'static', 'temp')
+                os.makedirs(static_temp_dir, exist_ok=True)
+                
+                new_filename = f"preview_{timestamp}_{seal['id']}.png"
+                dst_path = os.path.join(static_temp_dir, new_filename)
+                shutil.copy(seal['path'], dst_path)
+                
+                seal['preview_url'] = f"/static/temp/{new_filename}"
+                seal['temp_filename'] = new_filename # 用于后续确认导入时索引
+                result_seals.append(seal)
+            
+            # 清理原始PDF，保留提取出的图片供用户选择
+            try:
+                os.remove(filepath)
+                # shutil.rmtree(temp_output_dir) # 这里不能删，因为原始 seal['path'] 可能还在引用... 
+                # 其实上面已经copy到了 static/temp，所以 temp_output_dir 可以删了
+                shutil.rmtree(temp_output_dir)
+            except:
+                pass
+                
+            return jsonify({
+                'message': '提取成功',
+                'count': len(result_seals),
+                'seals': result_seals
+            })
+            
+        except Exception as e:
+            return jsonify({'error': f'提取失败: {str(e)}'}), 500
+            
+    return jsonify({'error': '不支持的文件格式'}), 400
+
+@app.route('/api/confirm_import_templates', methods=['POST'])
+def confirm_import_templates():
+    """确认导入选中的印章作为模板"""
+    data = request.json
+    selected_items = data.get('files', []) # 兼容旧格式，或者新格式 list of dict
+    
+    if not selected_items:
+        return jsonify({'message': '未选择任何文件', 'count': 0})
+        
+    saved_count = 0
+    os.makedirs(TEMPLATE_FOLDER, exist_ok=True)
+    static_temp_dir = os.path.join(app.root_path, 'static', 'temp')
+    
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+    
+    for item in selected_items:
+        # 支持两种格式：字符串（旧）或对象（新）
+        if isinstance(item, str):
+            temp_filename = item
+            custom_name = None
+        else:
+            temp_filename = item.get('filename')
+            custom_name = item.get('name')
+            
+        src_path = os.path.join(static_temp_dir, temp_filename)
+        if os.path.exists(src_path):
+            if custom_name:
+                # 使用自定义名称，保留扩展名
+                base_name = secure_filename_with_chinese(custom_name)
+                ext = os.path.splitext(temp_filename)[1]
+                new_filename = f"{base_name}{ext}"
+                
+                # 处理重名
+                dst_path = os.path.join(TEMPLATE_FOLDER, new_filename)
+                counter = 1
+                while os.path.exists(dst_path):
+                    new_filename = f"{base_name}_{counter}{ext}"
+                    dst_path = os.path.join(TEMPLATE_FOLDER, new_filename)
+                    counter += 1
+            else:
+                # 生成正式模板文件名
+                new_filename = f"template_imported_{timestamp}_{saved_count}.png"
+                dst_path = os.path.join(TEMPLATE_FOLDER, new_filename)
+            
+            shutil.copy(src_path, dst_path)
+            saved_count += 1
+            
+    return jsonify({
+        'message': '导入成功',
+        'count': saved_count
+    })
+
+@app.route('/api/upload_template_pdf', methods=['POST'])
+def upload_template_pdf():
+    # 保留旧接口以防万一，或者重定向到新的逻辑
+    # 这里为了兼容性暂时保留，但建议前端改用 extract_seals_from_pdf
+    return extract_seals_from_pdf()
+
+@app.route('/api/delete_template', methods=['POST'])
+def delete_template():
+    """删除指定的模板文件"""
+    try:
+        data = request.json
+        filename = data.get('filename')
+        
+        if not filename:
+            return jsonify({'error': '未指定文件名'}), 400
+            
+        # 安全检查：确保文件名只包含允许的字符，防止路径遍历
+        filename = secure_filename(filename)
+        filepath = os.path.join(TEMPLATE_FOLDER, filename)
+        
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            return jsonify({'message': '删除成功'})
+        else:
+            return jsonify({'error': '文件不存在'}), 404
+            
+    except Exception as e:
+        return jsonify({'error': f'删除失败: {str(e)}'}), 500
+
 @app.route('/api/templates', methods=['GET'])
 def get_template_list():
     """获取模板列表"""
@@ -547,8 +767,12 @@ def get_template_list():
 @app.route('/api/template/<path:filename>')
 def get_template_image(filename):
     """获取模板图片"""
-    safe_filename = secure_filename(filename)
-    filepath = os.path.join(TEMPLATE_FOLDER, safe_filename)
+    # 允许中文文件名的安全处理，不再使用 secure_filename 这种会把中文干掉的方法
+    # 但要防止路径遍历
+    if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
+        return jsonify({'error': '非法路径'}), 400
+        
+    filepath = os.path.join(TEMPLATE_FOLDER, filename)
     
     if os.path.exists(filepath):
         # 为模板图片也添加时间戳防止缓存

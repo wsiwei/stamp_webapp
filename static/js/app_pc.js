@@ -41,8 +41,20 @@ class StampAppPC {
         
         // 模板上传事件
         const templateInput = document.getElementById('templateInput');
-        document.getElementById('uploadTemplateBtn').addEventListener('click', () => templateInput.click());
+        document.getElementById('uploadImageTemplateBtn').addEventListener('click', (e) => {
+            e.preventDefault();
+            templateInput.accept = ".png,.jpg,.jpeg,.bmp";
+            templateInput.click();
+        });
+        document.getElementById('uploadPdfTemplateBtn').addEventListener('click', (e) => {
+            e.preventDefault();
+            templateInput.accept = ".pdf";
+            templateInput.click();
+        });
         templateInput.addEventListener('change', this.uploadTemplate.bind(this));
+        
+        // 模板确认导入按钮
+        document.getElementById('confirmImportBtn').addEventListener('click', this.confirmImportTemplates.bind(this));
 
         // 预览切换事件
         document.getElementById('togglePreviewBtn').addEventListener('click', this.togglePreviewMode.bind(this));
@@ -398,42 +410,191 @@ class StampAppPC {
         // 重置input以便下次选择相同文件
         e.target.value = '';
 
-        if (file.size > 5 * 1024 * 1024) {
-            this.showConfirm('文件过大', '模板图片不能超过5MB', () => {});
+        if (file.size > 16 * 1024 * 1024) {
+            this.showConfirm('文件过大', '文件不能超过16MB', () => {});
             return;
         }
 
-        this.showLoading('正在上传模板...', '请稍候...');
+        const isPdf = file.name.toLowerCase().endsWith('.pdf');
         
-        const formData = new FormData();
-        formData.append('file', file);
+        if (isPdf) {
+            // PDF 提取流程
+            this.showLoading('正在提取印章...', '正在分析PDF并提取印章，稍后请选择需要导入的印章...');
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const response = await fetch('/api/extract_seals_from_pdf', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                this.hideLoading();
+                
+                if (response.ok && result.count > 0) {
+                    this.showSelectTemplateModal(result.seals);
+                } else if (response.ok && result.count === 0) {
+                    this.showConfirm('未检测到印章', '该PDF文件中未检测到符合条件的红色公章', () => {});
+                } else {
+                    this.showConfirm('提取失败', result.error || '提取过程中发生错误', () => {});
+                }
+            } catch (error) {
+                this.hideLoading();
+                this.showConfirm('网络错误', '请求失败: ' + error.message, () => {});
+            }
+        } else {
+            // 图片直接上传流程
+            this.showLoading('正在上传模板...', '请稍候...');
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                const response = await fetch('/api/upload_template', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                this.hideLoading();
+                
+                if (response.ok) {
+                    await this.loadTemplates();
+                    const toast = document.createElement('div');
+                    toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 p-3 bg-success text-white rounded shadow';
+                    toast.style.zIndex = '9999';
+                    toast.innerHTML = `<i class="bi bi-check-circle me-2"></i>模板 "${result.filename}" 上传成功`;
+                    document.body.appendChild(toast);
+                    setTimeout(() => toast.remove(), 3000);
+                } else {
+                    this.showConfirm('上传失败', result.error || '上传失败', () => {});
+                }
+            } catch (error) {
+                this.hideLoading();
+                this.showConfirm('网络错误', '上传过程中发生错误: ' + error.message, () => {});
+            }
+        }
+    }
+
+    showSelectTemplateModal(seals) {
+        const modal = new bootstrap.Modal(document.getElementById('selectTemplateModal'));
+        const grid = document.getElementById('extractedSealsGrid');
+        const countInfo = document.getElementById('extractedCountInfo');
+        
+        grid.innerHTML = '';
+        countInfo.textContent = `共提取到 ${seals.length} 个印章`;
+        
+        seals.forEach((seal, index) => {
+            const item = document.createElement('div');
+            item.className = 'col-auto';
+            item.style.width = '180px';
+            item.innerHTML = `
+                <div class="card h-100 seal-select-item" data-filename="${seal.temp_filename}" style="cursor:pointer; border:2px solid transparent; transition:all 0.2s;">
+                    <div class="card-body p-2 text-center">
+                        <img src="${seal.preview_url}" class="img-fluid mb-2" style="height:100px; object-fit:contain;">
+                        <div class="small text-muted text-truncate mb-2">第${seal.page}页</div>
+                        <input type="text" class="form-control form-control-sm mb-2 seal-name-input" 
+                               value="印章${index + 1}" placeholder="请输入名称" onclick="event.stopPropagation()">
+                        <div class="form-check d-flex justify-content-center">
+                            <input class="form-check-input" type="checkbox" checked style="pointer-events:none;">
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // 点击切换选中状态
+            const card = item.querySelector('.card');
+            const checkbox = item.querySelector('.form-check-input');
+            const nameInput = item.querySelector('.seal-name-input');
+            
+            // 默认选中样式
+            card.style.borderColor = 'var(--primary-color)';
+            card.style.backgroundColor = 'var(--primary-light)';
+            
+            card.addEventListener('click', (e) => {
+                // 如果点击的是输入框，不触发选中切换
+                if (e.target === nameInput) return;
+                
+                checkbox.checked = !checkbox.checked;
+                if (checkbox.checked) {
+                    card.style.borderColor = 'var(--primary-color)';
+                    card.style.backgroundColor = 'var(--primary-light)';
+                    nameInput.disabled = false;
+                } else {
+                    card.style.borderColor = 'transparent';
+                    card.style.backgroundColor = 'white';
+                    nameInput.disabled = true;
+                }
+                this.updateSelectedCount();
+            });
+            
+            grid.appendChild(item);
+        });
+        
+        this.updateSelectedCount();
+        modal.show();
+    }
+    
+    updateSelectedCount() {
+        const count = document.querySelectorAll('.seal-select-item .form-check-input:checked').length;
+        const btn = document.getElementById('confirmImportBtn');
+        btn.textContent = `确认导入 (${count})`;
+        btn.disabled = count === 0;
+    }
+    
+    async confirmImportTemplates() {
+        const selectedItems = document.querySelectorAll('.seal-select-item');
+        const filesToImport = [];
+        
+        selectedItems.forEach(item => {
+            const checkbox = item.querySelector('.form-check-input');
+            if (checkbox.checked) {
+                const filename = item.dataset.filename;
+                const nameInput = item.querySelector('.seal-name-input');
+                const customName = nameInput.value.trim();
+                
+                filesToImport.push({
+                    filename: filename,
+                    name: customName || null
+                });
+            }
+        });
+        
+        if (filesToImport.length === 0) return;
+        
+        // 关闭模态框
+        const modalEl = document.getElementById('selectTemplateModal');
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        modal.hide();
+        
+        this.showLoading('正在导入...', '正在保存选中的印章模板...');
         
         try {
-            const response = await fetch('/api/upload_template', {
+            const response = await fetch('/api/confirm_import_templates', {
                 method: 'POST',
-                body: formData
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ files: filesToImport })
             });
             
             const result = await response.json();
+            this.hideLoading();
             
             if (response.ok) {
-                this.hideLoading();
-                // 重新加载模板列表
                 await this.loadTemplates();
-                // 提示成功
                 const toast = document.createElement('div');
                 toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 p-3 bg-success text-white rounded shadow';
                 toast.style.zIndex = '9999';
-                toast.innerHTML = `<i class="bi bi-check-circle me-2"></i>模板 "${result.filename}" 上传成功`;
+                toast.innerHTML = `<i class="bi bi-check-circle me-2"></i>成功导入 ${result.count} 个模板`;
                 document.body.appendChild(toast);
                 setTimeout(() => toast.remove(), 3000);
             } else {
-                this.hideLoading();
-                this.showConfirm('上传失败', result.error || '上传失败', () => {});
+                this.showConfirm('导入失败', result.message || '部分或全部导入失败', () => {});
             }
         } catch (error) {
             this.hideLoading();
-            this.showConfirm('网络错误', '上传过程中发生错误: ' + error.message, () => {});
+            this.showConfirm('错误', '导入请求失败: ' + error.message, () => {});
         }
     }
 
@@ -469,6 +630,9 @@ class StampAppPC {
             const templateUrl = `/api/template/${encodeURIComponent(template)}?_t=${Date.now()}`;
             
             templateItem.innerHTML = `
+                <div class="template-delete-btn" title="删除模板">
+                    <i class="bi bi-x-lg"></i>
+                </div>
                 <img src="${templateUrl}" 
                      class="template-image" 
                      alt="模板 ${index + 1}"
@@ -476,6 +640,13 @@ class StampAppPC {
                 <div class="template-name" title="${template}">${template}</div>
             `;
             
+            // 绑定删除事件
+            const deleteBtn = templateItem.querySelector('.template-delete-btn');
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation(); // 防止触发选择事件
+                this.deleteTemplate(template);
+            });
+
             templateItem.addEventListener('click', (e) => {
                 document.querySelectorAll('.template-item').forEach(item => {
                     item.classList.remove('selected');
@@ -489,6 +660,49 @@ class StampAppPC {
         });
     }
     
+    async deleteTemplate(filename) {
+        this.showConfirm('确认删除', `确定要删除模板 "${filename}" 吗？此操作不可恢复。`, async () => {
+            this.showLoading('正在删除...', '请稍候...');
+            
+            try {
+                const response = await fetch('/api/delete_template', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ filename: filename })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    // 如果删除的是当前选中的模板，清除选中状态
+                    if (this.selectedTemplate === filename) {
+                        this.selectedTemplate = null;
+                        this.checkCompareReady();
+                    }
+                    
+                    await this.loadTemplates();
+                    this.hideLoading();
+                    
+                    // 提示成功
+                    const toast = document.createElement('div');
+                    toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 p-3 bg-success text-white rounded shadow';
+                    toast.style.zIndex = '9999';
+                    toast.innerHTML = `<i class="bi bi-trash me-2"></i>模板已删除`;
+                    document.body.appendChild(toast);
+                    setTimeout(() => toast.remove(), 3000);
+                } else {
+                    this.hideLoading();
+                    this.showConfirm('删除失败', result.error || '无法删除模板', () => {});
+                }
+            } catch (error) {
+                this.hideLoading();
+                this.showConfirm('错误', '请求失败: ' + error.message, () => {});
+            }
+        });
+    }
+
     selectTemplate(template) {
         // 移除之前的选中状态
         document.querySelectorAll('.template-item').forEach(item => {

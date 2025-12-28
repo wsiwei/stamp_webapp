@@ -347,6 +347,32 @@
             border: 2px solid transparent;
             transition: var(--transition);
             background: #f9fafb;
+            position: relative;
+        }
+
+        .template-delete-btn {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            width: 24px;
+            height: 24px;
+            background: var(--danger-color);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            opacity: 0;
+            transition: all 0.2s;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
+
+        .template-item:hover .template-delete-btn {
+            opacity: 1;
+            transform: scale(1.1);
         }
 
         .template-item:hover {
@@ -704,10 +730,16 @@
                             <i class="bi bi-grid me-2"></i>比对模板
                         </span>
                         <div>
-                            <input type="file" id="templateInput" accept=".png,.jpg,.jpeg,.bmp" style="display: none;">
-                            <button class="btn btn-sm btn-outline-primary" id="uploadTemplateBtn">
-                                <i class="bi bi-cloud-plus me-1"></i>上传模板
-                            </button>
+                            <input type="file" id="templateInput" accept=".png,.jpg,.jpeg,.bmp,.pdf" style="display: none;">
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown">
+                                    <i class="bi bi-cloud-plus me-1"></i>上传模板
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" href="#" id="uploadImageTemplateBtn"><i class="bi bi-image me-2"></i>上传图片</a></li>
+                                    <li><a class="dropdown-item" href="#" id="uploadPdfTemplateBtn"><i class="bi bi-file-earmark-pdf me-2"></i>从PDF提取</a></li>
+                                </ul>
+                            </div>
                         </div>
                     </div>
                     <div class="card-body">
@@ -849,6 +881,35 @@
                 <div class="modal-footer border-0 pt-0">
                     <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
                     <button type="button" class="btn btn-primary px-4" id="confirmBtn">确定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模板选择模态框 -->
+    <div class="modal fade" id="selectTemplateModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-bold">
+                        <i class="bi bi-grid-3x3-gap me-2 text-primary"></i>选择需要导入的印章模板
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body py-4">
+                    <div class="alert alert-info mb-4">
+                        <i class="bi bi-info-circle me-2"></i>系统从PDF中提取了以下印章，请勾选您需要添加到模板库的印章。
+                    </div>
+                    <div class="seals-grid" id="extractedSealsGrid">
+                        <!-- 动态生成 -->
+                    </div>
+                </div>
+                <div class="modal-footer border-0 pt-0">
+                    <div class="me-auto text-muted small" id="extractedCountInfo"></div>
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary px-4" id="confirmImportBtn">
+                        <i class="bi bi-check-lg me-2"></i>确认导入选中的模板
+                    </button>
                 </div>
             </div>
         </div>
