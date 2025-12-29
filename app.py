@@ -711,13 +711,26 @@ def confirm_import_templates():
                 
                 # 处理重名
                 dst_path = os.path.join(TEMPLATE_FOLDER, new_filename)
-                counter = 1
-                while os.path.exists(dst_path):
-                    new_filename = f"{base_name}_{counter}{ext}"
-                    dst_path = os.path.join(TEMPLATE_FOLDER, new_filename)
-                    counter += 1
+                
+                # 如果文件已存在，返回错误提示
+                if os.path.exists(dst_path):
+                    # 为了不中断整个批量导入，我们可以记录错误，或者直接在这里抛出异常
+                    # 考虑到用户体验，如果是批量导入，遇到重名就直接跳过并提示
+                    # 或者我们可以返回一个错误列表
+                    # 这里简单起见，我们选择：如果重名，则不导入，并计入失败
+                    # 但为了让用户知道，我们需要返回具体信息
+                    
+                    # 策略修改：如果遇到自定义名称重名，则报错。如果是系统生成的默认名，则自动重命名。
+                    # 这里是 custom_name 分支，说明是用户指定的，所以应该严格检查
+                    
+                    # 检查是否真的重名（不区分大小写可能更好，但Linux区分）
+                    return jsonify({
+                        'message': '导入失败',
+                        'error': f'模板名称 "{new_filename}" 已存在，请使用其他名称。',
+                        'count': saved_count
+                    }), 409 # Conflict status code
             else:
-                # 生成正式模板文件名
+                # 生成正式模板文件名 (系统自动生成，不用担心重名，因为有时间戳和索引)
                 new_filename = f"template_imported_{timestamp}_{saved_count}.png"
                 dst_path = os.path.join(TEMPLATE_FOLDER, new_filename)
             
@@ -745,8 +758,10 @@ def delete_template():
         if not filename:
             return jsonify({'error': '未指定文件名'}), 400
             
-        # 安全检查：确保文件名只包含允许的字符，防止路径遍历
-        filename = secure_filename(filename)
+        # 安全检查：防止路径遍历
+        if '..' in filename or filename.startswith('/') or filename.startswith('\\'):
+             return jsonify({'error': '非法路径'}), 400
+
         filepath = os.path.join(TEMPLATE_FOLDER, filename)
         
         if os.path.exists(filepath):

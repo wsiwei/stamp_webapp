@@ -562,10 +562,10 @@ class StampAppPC {
         
         if (filesToImport.length === 0) return;
         
-        // 关闭模态框
-        const modalEl = document.getElementById('selectTemplateModal');
-        const modal = bootstrap.Modal.getInstance(modalEl);
-        modal.hide();
+        // 暂时不关闭模态框，等待后端响应
+        // const modalEl = document.getElementById('selectTemplateModal');
+        // const modal = bootstrap.Modal.getInstance(modalEl);
+        // modal.hide();
         
         this.showLoading('正在导入...', '正在保存选中的印章模板...');
         
@@ -582,6 +582,11 @@ class StampAppPC {
             this.hideLoading();
             
             if (response.ok) {
+                // 成功后再关闭模态框
+                const modalEl = document.getElementById('selectTemplateModal');
+                const modal = bootstrap.Modal.getInstance(modalEl);
+                if (modal) modal.hide();
+
                 await this.loadTemplates();
                 const toast = document.createElement('div');
                 toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-4 p-3 bg-success text-white rounded shadow';
@@ -590,7 +595,21 @@ class StampAppPC {
                 document.body.appendChild(toast);
                 setTimeout(() => toast.remove(), 3000);
             } else {
-                this.showConfirm('导入失败', result.message || '部分或全部导入失败', () => {});
+                // 处理 409 Conflict (重名) 或其他错误
+                if (response.status === 409) {
+                     this.showConfirm('命名冲突', result.error, () => {
+                         // 重新显示模态框，让用户修改名字
+                         // 这里简单处理：模态框其实已经关了，重新打开有点复杂，
+                         // 所以最好是当初就不关模态框，直到成功。
+                         // 但由于架构限制，我们这里直接提示用户重试。
+                         // 更好的体验是：保持模态框打开，只提示错误。
+                     });
+                     // 重新打开模态框（如果数据还在的话，但这里数据流比较单向）
+                     // 由于 confirmImportTemplates 中一开始就关闭了模态框，所以这里重新打开也丢失了用户之前的输入。
+                     // 改进方案：在 fetch 成功之前不要关闭模态框。
+                } else {
+                    this.showConfirm('导入失败', result.message || '部分或全部导入失败', () => {});
+                }
             }
         } catch (error) {
             this.hideLoading();
